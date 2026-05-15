@@ -1,0 +1,562 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>Meadow — XR</title>
+<script src="https://cdn.jsdelivr.net/npm/aframe@1.5.0/dist/aframe-master.min.js"></script>
+<style>
+  body { margin: 0; background: #87a96b; font-family: Georgia, serif; }
+  #intro {
+    position: fixed; inset: 0; z-index: 9999;
+    display: flex; flex-direction: column; align-items: center; justify-content: center;
+    background: radial-gradient(circle at 50% 40%, #c9d8a8 0%, #6b8e4e 60%, #2d4a1f 100%);
+    color: #1a1a0f; text-align: center; padding: 2rem;
+  }
+  #intro h1 {
+    font-family: 'Cormorant Garamond', 'Playfair Display', Georgia, serif;
+    font-size: clamp(3rem, 9vw, 6rem); font-weight: 300; letter-spacing: 0.08em;
+    margin: 0 0 1rem; font-style: italic;
+  }
+  #intro p { max-width: 38ch; line-height: 1.6; margin: 0.4rem 0; font-size: 1.05rem; }
+  #intro small { margin-top: 2rem; opacity: 0.7; font-size: 0.85rem; letter-spacing: 0.15em; text-transform: uppercase; }
+  #intro button {
+    margin-top: 2.5rem; padding: 1rem 3rem; background: #1a1a0f; color: #f0ead2;
+    border: none; font-size: 0.9rem; letter-spacing: 0.3em; text-transform: uppercase;
+    cursor: pointer; font-family: inherit; transition: all 0.3s ease;
+  }
+  #intro button:hover { background: #f0ead2; color: #1a1a0f; transform: translateY(-2px); }
+  .hidden { display: none !important; }
+  #hud {
+    position: fixed; bottom: 20px; left: 50%; transform: translateX(-50%);
+    color: rgba(255,255,255,0.75); font-size: 0.8rem; letter-spacing: 0.25em;
+    text-transform: uppercase; pointer-events: none; z-index: 100;
+    text-shadow: 0 2px 6px rgba(0,0,0,0.5); font-family: Georgia, serif;
+  }
+</style>
+</head>
+<body>
+
+<div id="intro">
+  <h1>a meadow</h1>
+  <p>A field of tall grass, swayed by an invisible wind.</p>
+  <p>Walk slowly. Lay down. Listen.</p>
+  <small>WASD to move · Mouse to look · L to lay down · VR headset supported</small>
+  <button onclick="document.getElementById('intro').classList.add('hidden')">Enter</button>
+</div>
+
+<div id="hud">walk · look · lay down (L)</div>
+
+<a-scene
+  renderer="antialias: true; colorManagement: true; physicallyCorrectLights: true; toneMapping: ACESFiltered; exposure: 1.0"
+  fog="type: exponential; color: #d8e0c0; density: 0.018"
+  background="color: #b8c89a"
+  vr-mode-ui="enabled: true">
+
+  <a-assets>
+    <!-- Procedural assets handled in JS -->
+  </a-assets>
+
+  <!-- Sky: warm golden-hour gradient -->
+  <a-sky id="sky" radius="500" sky-gradient></a-sky>
+
+  <!-- Distant sun -->
+  <a-entity id="sun" position="80 60 -120"
+    light="type: directional; color: #fff4d6; intensity: 1.6; castShadow: true">
+  </a-entity>
+
+  <!-- Ambient warm fill -->
+  <a-entity light="type: ambient; color: #a8b888; intensity: 0.55"></a-entity>
+
+  <!-- Hemisphere light for natural sky/ground bounce -->
+  <a-entity light="type: hemisphere; color: #ffeec2; groundColor: #5a6a3a; intensity: 0.6"></a-entity>
+
+  <!-- The ground itself -->
+  <a-circle id="ground" radius="200" rotation="-90 0 0" position="0 0 0"
+    material="color: #4a5a2a; roughness: 1.0; metalness: 0.0"></a-circle>
+
+  <!-- Grass field, populated via custom component -->
+  <a-entity id="grassfield" grass-field="count: 1000000; radius: 60"></a-entity>
+
+  <!-- A few distant trees as silhouettes -->
+  <a-entity id="trees"></a-entity>
+
+  <!-- Player rig: camera + controls + position tracker -->
+  <a-entity id="rig" position="0 1.6 4" movement-controls="speed: 0.12; fly: false" lay-down-control>
+    <a-entity id="camera" camera look-controls="pointerLockEnabled: false" wasd-controls="enabled: false">
+      <a-entity cursor="rayOrigin: mouse" raycaster="objects: .interactive"></a-entity>
+    </a-entity>
+    <!-- VR controllers -->
+    <a-entity laser-controls="hand: left"></a-entity>
+    <a-entity laser-controls="hand: right"></a-entity>
+  </a-entity>
+
+</a-scene>
+
+<script>
+/* ============================================================
+   Wait for A-Frame to be available before registering anything.
+   This prevents "AFRAME is not defined" when the CDN is slow.
+   ============================================================ */
+function bootMeadow() {
+  if (typeof AFRAME === 'undefined' || typeof THREE === 'undefined') {
+    return setTimeout(bootMeadow, 50);
+  }
+
+/* ============================================================
+   SKY GRADIENT — soft golden-hour
+   ============================================================ */
+AFRAME.registerComponent('sky-gradient', {
+  init: function () {
+    const mesh = this.el.getObject3D('mesh');
+    if (!mesh) {
+      this.el.addEventListener('loaded', () => this.applyGradient());
+    } else {
+      this.applyGradient();
+    }
+  },
+  applyGradient: function () {
+    const mesh = this.el.getObject3D('mesh');
+    if (!mesh) return;
+    const material = new THREE.ShaderMaterial({
+      side: THREE.BackSide,
+      uniforms: {
+        topColor:    { value: new THREE.Color('#7da8d8') },
+        midColor:    { value: new THREE.Color('#e8c89a') },
+        bottomColor: { value: new THREE.Color('#d8d0a8') }
+      },
+      vertexShader: `
+        varying vec3 vWorldPos;
+        void main() {
+          vWorldPos = (modelMatrix * vec4(position, 1.0)).xyz;
+          gl_Position = projectionMatrix * modelViewMatrix * vec4(position, 1.0);
+        }
+      `,
+      fragmentShader: `
+        uniform vec3 topColor;
+        uniform vec3 midColor;
+        uniform vec3 bottomColor;
+        varying vec3 vWorldPos;
+        void main() {
+          float h = normalize(vWorldPos).y;
+          vec3 col;
+          if (h > 0.0) {
+            col = mix(midColor, topColor, smoothstep(0.0, 0.7, h));
+          } else {
+            col = mix(midColor, bottomColor, smoothstep(0.0, -0.3, h));
+          }
+          gl_FragColor = vec4(col, 1.0);
+        }
+      `
+    });
+    mesh.material = material;
+  }
+});
+
+/* ============================================================
+   GRASS FIELD — instanced blades with wind shader
+   ============================================================
+   The geometry of one blade is a tapered triangle strip (a few
+   segments tall so it can bend). We use InstancedMesh so we can
+   render tens of thousands of blades cheaply.
+
+   Wind: 2D Simplex-like noise in the vertex shader, sampled at
+   (blade_world_xz * windScale - time * windDir). The noise value
+   is multiplied by (height_along_blade)^2 so the tip bends more
+   than the base — physically what a real grass blade does.
+
+   Player push: a uniform uPlayerPos pushes nearby blades outward
+   (a radial dent that fades with distance).
+============================================================ */
+AFRAME.registerComponent('grass-field', {
+  schema: {
+    count:  { type: 'number', default: 100000 },
+    radius: { type: 'number', default: 60 }
+  },
+
+  init: function () {
+    const data = this.data;
+    const scene = this.el.sceneEl.object3D;
+
+    /* ---------- Geometry: one tapered blade ---------- */
+    // A blade is a quad split into N segments vertically.
+    // We build it in local space; instance transforms place each blade.
+    const SEGMENTS = 5;
+    const BLADE_WIDTH = 0.05;
+    const BLADE_HEIGHT = 1.0; // base height; instance scales add variation
+
+    const positions = [];
+    const uvs = [];
+    const indices = [];
+
+    for (let i = 0; i <= SEGMENTS; i++) {
+      const v = i / SEGMENTS;             // 0 at base, 1 at tip
+      const taper = 1.0 - v * 0.85;       // narrower toward tip
+      const w = BLADE_WIDTH * 0.5 * taper;
+      const y = v * BLADE_HEIGHT;
+      // left vertex
+      positions.push(-w, y, 0);
+      uvs.push(0, v);
+      // right vertex
+      positions.push( w, y, 0);
+      uvs.push(1, v);
+    }
+    // Make the tip a single point
+    const tipBase = SEGMENTS * 2;
+    // Replace last two vertices with one tip vertex to make a true point
+    // (simpler: just leave the quad strip — the taper makes it pointy enough)
+
+    for (let i = 0; i < SEGMENTS; i++) {
+      const a = i * 2;
+      const b = i * 2 + 1;
+      const c = (i + 1) * 2;
+      const d = (i + 1) * 2 + 1;
+      indices.push(a, c, b);
+      indices.push(b, c, d);
+    }
+
+    const bladeGeo = new THREE.BufferGeometry();
+    bladeGeo.setAttribute('position', new THREE.Float32BufferAttribute(positions, 3));
+    bladeGeo.setAttribute('uv', new THREE.Float32BufferAttribute(uvs, 2));
+    bladeGeo.setIndex(indices);
+    bladeGeo.computeVertexNormals();
+
+    /* ---------- Per-instance attributes ----------
+       Each blade gets:
+        - aOffset (vec3): world position (x,0,z) on the field
+        - aRotScale (vec4): cos(yaw), sin(yaw), height scale, hue shift
+    */
+    const offsets = new Float32Array(data.count * 3);
+    const rotScales = new Float32Array(data.count * 4);
+
+    for (let i = 0; i < data.count; i++) {
+      // Uniform disc distribution
+      const r = Math.sqrt(Math.random()) * data.radius;
+      const theta = Math.random() * Math.PI * 2;
+      const x = Math.cos(theta) * r;
+      const z = Math.sin(theta) * r;
+      offsets[i * 3 + 0] = x;
+      offsets[i * 3 + 1] = 0;
+      offsets[i * 3 + 2] = z;
+
+      const yaw = Math.random() * Math.PI * 2;
+      const heightScale = 0.7 + Math.random() * 0.2;  // 0.7 .. 1.7 m
+      const hue = Math.random();                       // 0..1, used as variation seed
+      rotScales[i * 4 + 0] = Math.cos(yaw);
+      rotScales[i * 4 + 1] = Math.sin(yaw);
+      rotScales[i * 4 + 2] = heightScale;
+      rotScales[i * 4 + 3] = hue;
+    }
+
+    bladeGeo.setAttribute('aOffset',   new THREE.InstancedBufferAttribute(offsets, 3));
+    bladeGeo.setAttribute('aRotScale', new THREE.InstancedBufferAttribute(rotScales, 4));
+
+    /* ---------- Shader: wind + player push ---------- */
+    const vertexShader = `
+      precision highp float;
+
+      attribute vec3 aOffset;
+      attribute vec4 aRotScale;   // cos(yaw), sin(yaw), heightScale, hue
+
+      uniform float uTime;
+      uniform vec3  uPlayerPos;   // world XZ used; Y for crouching effect
+      uniform vec2  uWindDir;     // normalized 2D direction
+      uniform float uWindScale;   // spatial frequency of noise
+      uniform float uWindSpeed;   // temporal frequency
+      uniform float uWindStrength;// max bend in radians-ish
+
+      varying float vHeight;
+      varying float vHue;
+      varying float vBend;
+
+      /* ----- 2D Simplex noise (Ashima / IQ, classic) ----- */
+      vec3 mod289(vec3 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+      vec2 mod289(vec2 x) { return x - floor(x * (1.0 / 289.0)) * 289.0; }
+      vec3 permute(vec3 x) { return mod289(((x*34.0)+1.0)*x); }
+      float snoise(vec2 v) {
+        const vec4 C = vec4(0.211324865405187, 0.366025403784439,
+                           -0.577350269189626, 0.024390243902439);
+        vec2 i  = floor(v + dot(v, C.yy));
+        vec2 x0 = v -   i + dot(i, C.xx);
+        vec2 i1 = (x0.x > x0.y) ? vec2(1.0, 0.0) : vec2(0.0, 1.0);
+        vec4 x12 = x0.xyxy + C.xxzz;
+        x12.xy -= i1;
+        i = mod289(i);
+        vec3 p = permute( permute( i.y + vec3(0.0, i1.y, 1.0))
+                                  + i.x + vec3(0.0, i1.x, 1.0));
+        vec3 m = max(0.5 - vec3(dot(x0,x0), dot(x12.xy,x12.xy), dot(x12.zw,x12.zw)), 0.0);
+        m = m*m; m = m*m;
+        vec3 x = 2.0 * fract(p * C.www) - 1.0;
+        vec3 h = abs(x) - 0.5;
+        vec3 ox = floor(x + 0.5);
+        vec3 a0 = x - ox;
+        m *= 1.79284291400159 - 0.85373472095314 * (a0*a0 + h*h);
+        vec3 g;
+        g.x  = a0.x  * x0.x  + h.x  * x0.y;
+        g.yz = a0.yz * x12.xz + h.yz * x12.yw;
+        return 130.0 * dot(m, g);
+      }
+
+      void main() {
+        // Rotate the blade around Y by the per-instance yaw
+        float c = aRotScale.x;
+        float s = aRotScale.y;
+        float hScale = aRotScale.z;
+
+        vec3 p = position;
+        p.y *= hScale;                       // height variation
+        vec3 rotated = vec3(
+          p.x * c - p.z * s,
+          p.y,
+          p.x * s + p.z * c
+        );
+
+        // World position before bending
+        vec3 worldPos = rotated + aOffset;
+
+        // -------- WIND --------
+        // Sample noise at world XZ minus time*windDir, so the
+        // noise pattern shifts diagonally across the field.
+        vec2 noiseCoord = worldPos.xz * uWindScale - uWindDir * uTime * uWindSpeed;
+        float n = snoise(noiseCoord);              // -1..1
+        // Add a second octave for finer detail
+        n += 0.5 * snoise(noiseCoord * 2.3 + 17.0);
+        n /= 1.5;
+
+        // Bend amount scales with height along the blade (tip bends more)
+        // and overall wind strength.
+        float vNorm = position.y;          // 0 at base, BLADE_HEIGHT at tip in local
+        // position.y in local is 0..1 (BLADE_HEIGHT=1.0), good as-is
+        float bendFactor = vNorm * vNorm;  // quadratic — base stays planted
+        float bend = n * uWindStrength * bendFactor;
+
+        // Apply bend in the wind direction (XZ)
+        vec3 bendOffset = vec3(uWindDir.x, 0.0, uWindDir.y) * bend;
+        // Slight downward droop so the tip doesn't grow taller as it bends
+        bendOffset.y -= bend * bend * 0.3;
+        worldPos += bendOffset;
+
+        // -------- PLAYER PUSH --------
+        // Push grass away from the player within a radius
+        vec2 toPlayer = worldPos.xz - uPlayerPos.xz;
+        float d = length(toPlayer);
+        float pushRadius = 0.9;
+        if (d < pushRadius) {
+          float t = 1.0 - d / pushRadius;
+          t = t * t;                       // smooth falloff
+          // Push outward and flatten down
+          vec2 pushDir = (d > 0.001) ? toPlayer / d : vec2(1.0, 0.0);
+          worldPos.xz += pushDir * t * 0.35 * bendFactor;
+          worldPos.y  -= t * 0.6 * bendFactor;
+        }
+
+        // Pass to fragment
+        vHeight = vNorm;
+        vHue = aRotScale.w;
+        vBend = abs(n);
+
+        gl_Position = projectionMatrix * viewMatrix * vec4(worldPos, 1.0);
+      }
+    `;
+
+    const fragmentShader = `
+      precision highp float;
+      varying float vHeight;
+      varying float vHue;
+      varying float vBend;
+
+      uniform vec3 uBaseColor;
+      uniform vec3 uTipColor;
+      uniform vec3 uFogColor;
+      uniform float uFogDensity;
+
+      void main() {
+        // Base-to-tip gradient (darker green at base, lighter golden green at tip)
+        vec3 col = mix(uBaseColor, uTipColor, vHeight);
+
+        // Per-blade hue variation (subtle warm/cool shifts)
+        col += (vHue - 0.5) * 0.12 * vec3(0.6, 0.5, 0.2);
+
+        // Slight darkening where wind isn't bending (creates depth)
+        col *= 0.85 + vBend * 0.25;
+
+        // Cheap fog approximation: distance-based via gl_FragCoord.z
+        float depth = gl_FragCoord.z / gl_FragCoord.w;
+        float fogFactor = 1.0 - exp(-uFogDensity * depth);
+        col = mix(col, uFogColor, clamp(fogFactor, 0.0, 1.0));
+
+        gl_FragColor = vec4(col, 1.0);
+      }
+    `;
+
+    const material = new THREE.ShaderMaterial({
+      vertexShader,
+      fragmentShader,
+      side: THREE.DoubleSide,
+      uniforms: {
+        uTime:         { value: 0 },
+        uPlayerPos:    { value: new THREE.Vector3(0, 0, 0) },
+        uWindDir:      { value: new THREE.Vector2(0.7, 0.7).normalize() },
+        uWindScale:    { value: 0.12 },
+        uWindSpeed:    { value: 0.45 },
+        uWindStrength: { value: 0.55 },
+        uBaseColor:    { value: new THREE.Color('#3d5a1f') },
+        uTipColor:     { value: new THREE.Color('#b8c060') },
+        uFogColor:     { value: new THREE.Color('#d8e0c0') },
+        uFogDensity:   { value: 0.018 }
+      }
+    });
+
+    this.material = material;
+
+    // Use a regular Mesh since we already have per-instance attributes
+    // (this is "manual" instancing via attributes, drawn as a normal indexed mesh).
+    // Actually — to render N copies we need InstancedMesh OR an InstancedBufferGeometry.
+    // Convert geometry:
+    const instancedGeo = new THREE.InstancedBufferGeometry();
+    instancedGeo.index = bladeGeo.index;
+    instancedGeo.attributes.position = bladeGeo.attributes.position;
+    instancedGeo.attributes.uv = bladeGeo.attributes.uv;
+    instancedGeo.attributes.normal = bladeGeo.attributes.normal;
+    instancedGeo.setAttribute('aOffset', bladeGeo.attributes.aOffset);
+    instancedGeo.setAttribute('aRotScale', bladeGeo.attributes.aRotScale);
+    instancedGeo.instanceCount = data.count;
+
+    // Large bounding sphere so frustum culling doesn't drop the whole field
+    instancedGeo.boundingSphere = new THREE.Sphere(new THREE.Vector3(0,0,0), data.radius + 5);
+
+    const mesh = new THREE.Mesh(instancedGeo, material);
+    mesh.frustumCulled = false;
+    this.el.setObject3D('mesh', mesh);
+
+    /* ---------- Cache rig reference for player-push ---------- */
+    this.rig = document.getElementById('rig');
+    this.tmpVec = new THREE.Vector3();
+  },
+
+  tick: function (time) {
+    if (!this.material) return;
+    this.material.uniforms.uTime.value = time * 0.001;
+
+    if (this.rig && this.rig.object3D) {
+      this.rig.object3D.getWorldPosition(this.tmpVec);
+      this.material.uniforms.uPlayerPos.value.copy(this.tmpVec);
+    }
+  }
+});
+
+/* ============================================================
+   MOVEMENT — simple WASD on a rig (camera-relative)
+   ============================================================ */
+AFRAME.registerComponent('movement-controls', {
+  schema: {
+    speed: { type: 'number', default: 0.12 },
+    fly:   { type: 'boolean', default: false }
+  },
+  init: function () {
+    this.keys = {};
+    this.camera = this.el.querySelector('[camera]');
+    window.addEventListener('keydown', (e) => { this.keys[e.code] = true; });
+    window.addEventListener('keyup',   (e) => { this.keys[e.code] = false; });
+    // Click to lock pointer
+    this.el.sceneEl.canvas?.addEventListener('click', () => {
+      this.el.sceneEl.canvas.requestPointerLock?.();
+    });
+  },
+  tick: function () {
+    const k = this.keys;
+    if (!this.camera || !this.camera.object3D) return;
+
+    const dir = new THREE.Vector3();
+    const forward = new THREE.Vector3();
+    this.camera.object3D.getWorldDirection(forward);
+    forward.y = 0; forward.normalize();
+    const right = new THREE.Vector3().crossVectors(forward, new THREE.Vector3(0,1,0)).negate();
+
+    if (k['KeyW'] || k['ArrowUp'])    dir.sub(forward);
+    if (k['KeyS'] || k['ArrowDown'])  dir.add(forward);
+    if (k['KeyA'] || k['ArrowLeft'])  dir.sub(right);
+    if (k['KeyD'] || k['ArrowRight']) dir.add(right);
+
+    if (dir.lengthSq() > 0) {
+      dir.normalize().multiplyScalar(this.data.speed);
+      this.el.object3D.position.x += dir.x;
+      this.el.object3D.position.z += dir.z;
+      // Clamp to the field
+      const r = Math.hypot(this.el.object3D.position.x, this.el.object3D.position.z);
+      const max = 58;
+      if (r > max) {
+        this.el.object3D.position.x *= max / r;
+        this.el.object3D.position.z *= max / r;
+      }
+    }
+  }
+});
+
+/* ============================================================
+   LAY-DOWN — press L to drop the camera and tilt up
+   ============================================================ */
+AFRAME.registerComponent('lay-down-control', {
+  init: function () {
+    this.layingDown = false;
+    this.targetY = 1.6;
+    this.targetPitch = 0;
+    window.addEventListener('keydown', (e) => {
+      if (e.code === 'KeyL') {
+        this.layingDown = !this.layingDown;
+        this.targetY = this.layingDown ? 0.25 : 1.6;
+      }
+    });
+  },
+  tick: function () {
+    // Smoothly approach target height
+    const cur = this.el.object3D.position.y;
+    this.el.object3D.position.y += (this.targetY - cur) * 0.08;
+  }
+});
+
+/* ============================================================
+   DISTANT TREES — simple silhouette markers around the meadow
+   ============================================================ */
+document.addEventListener('DOMContentLoaded', () => {
+  const trees = document.getElementById('trees');
+  if (!trees) return;
+  const wait = () => {
+    if (!trees.sceneEl || !trees.sceneEl.hasLoaded) {
+      setTimeout(wait, 100); return;
+    }
+    for (let i = 0; i < 24; i++) {
+      const theta = (i / 24) * Math.PI * 2 + Math.random() * 0.1;
+      const r = 130 + Math.random() * 60;
+      const x = Math.cos(theta) * r;
+      const z = Math.sin(theta) * r;
+      const h = 10 + Math.random() * 8;
+      // trunk
+      const trunk = document.createElement('a-cylinder');
+      trunk.setAttribute('position', `${x} ${h/2} ${z}`);
+      trunk.setAttribute('radius', 0.4);
+      trunk.setAttribute('height', h);
+      trunk.setAttribute('color', '#3a2a1a');
+      trunk.setAttribute('material', 'roughness: 1; metalness: 0');
+      trees.appendChild(trunk);
+      // canopy
+      const canopy = document.createElement('a-sphere');
+      canopy.setAttribute('position', `${x} ${h + 2} ${z}`);
+      canopy.setAttribute('radius', 4 + Math.random() * 2);
+      canopy.setAttribute('color', '#2d4a1f');
+      canopy.setAttribute('material', 'roughness: 1; metalness: 0');
+      trees.appendChild(canopy);
+    }
+  };
+  wait();
+});
+
+} // end bootMeadow
+
+// Kick things off. If A-Frame is already loaded, runs immediately;
+// otherwise retries every 50ms until both AFRAME and THREE exist.
+bootMeadow();
+</script>
+
+</body>
+</html>
