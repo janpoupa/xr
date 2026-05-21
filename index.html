@@ -666,7 +666,7 @@ AFRAME.registerComponent('mole-spawner', {
     maxRadius: { type: 'number', default: 22 },
     triggerDistance: { type: 'number', default: 3.5 },
     peekHeight: { type: 'number', default: 0.25 },   // how high the mole rises
-    hiddenY:    { type: 'number', default: -0.5 }    // starting Y (below ground)
+    hiddenY:    { type: 'number', default: -1 }    // starting Y (below ground)
   },
   init: function () {
     this.rig = document.getElementById('rig');
@@ -695,7 +695,7 @@ AFRAME.registerComponent('mole-spawner', {
       // Molehill (static)
       const hill = document.createElement('a-entity');
       hill.setAttribute('gltf-model', '#molehill-model');
-      hill.setAttribute('position', `${x} 10 ${z}`);
+      hill.setAttribute('position', `${x} 1 ${z}`);
       hill.setAttribute('rotation', `0 ${yaw} 0`);
       // Tweak scale here if your GLB is sized differently
       hill.setAttribute('scale', '0.3 0.3 0.3');
