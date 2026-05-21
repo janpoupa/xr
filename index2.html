@@ -4,7 +4,7 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>Meadow — XR</title>
-<script src="https://cdn.jsdelivr.net/npm/aframe@1.7.1/dist/aframe-master.min.js"></script>
+<script src="https://cdn.jsdelivr.net/npm/aframe@1.5.0/dist/aframe-master.min.js"></script>
 <style>
   body { margin: 0; background: #87a96b; font-family: Georgia, serif; }
   #intro {
@@ -53,14 +53,6 @@
   background="color: #b8c89a"
   vr-mode-ui="enabled: true">
 
-  <a-assets>
-    <!-- Drop your GLB files into a "models/" folder next to this HTML.
-         If your filenames differ, just update the src attributes below. -->
-    <a-asset-item id="molehill-model" src="models/molehill.glb"></a-asset-item>
-    <a-asset-item id="mole-model"     src="models/mole.glb"></a-asset-item>
-    <a-asset-item id="frog-model"     src="models/frog.glb"></a-asset-item>
-  </a-assets>
-
   <a-sky id="sky" radius="800" sky-gradient></a-sky>
 
   <a-entity id="sun" position="80 60 -120"
@@ -76,12 +68,6 @@
 
   <!-- Sparse far grass extending toward the horizon hills -->
   <a-entity id="grass-far" grass-far="count: 25000; innerRadius: 28; outerRadius: 120"></a-entity>
-
-  <!-- Molehills with peeking moles, scattered around the meadow -->
-  <a-entity id="moles" mole-spawner="count: 5; minRadius: 4; maxRadius: 22; triggerDistance: 3.5"></a-entity>
-
-  <!-- Frogs that hop around and get startled by the player -->
-  <a-entity id="frogs" frog-spawner="count: 3; areaRadius: 20"></a-entity>
 
   <!-- Player rig -->
   <a-entity id="rig" position="0 1.6 4" movement-controls="speed: 0.12; fly: false" lay-down-control>
@@ -145,9 +131,9 @@ AFRAME.registerComponent('sky-gradient', {
     mesh.material = new THREE.ShaderMaterial({
       side: THREE.BackSide,
       uniforms: {
-        topColor:    { value: new THREE.Color('#7da8d8') },
-        midColor:    { value: new THREE.Color('#e8c89a') },
-        bottomColor: { value: new THREE.Color('#c8d4a6') }
+        topColor:    { value: new THREE.Color('#edd0ba') },
+        midColor:    { value: new THREE.Color('#fefadd') },
+        bottomColor: { value: new THREE.Color('#fefadd') }
       },
       vertexShader: `
         varying vec3 vWorldPos;
@@ -649,266 +635,6 @@ AFRAME.registerComponent('lay-down-control', {
     this.el.object3D.position.y += (this.targetY - cur) * 0.08;
   }
 });
-
-/* ============================================================
-   MOLE SPAWNER — places N molehills, each with a mole that
-   peeks out when the player gets close.
-   ============================================================
-   Each molehill is a static GLTF clone. The mole is a child
-   entity that sits below ground (hidden) by default, and tweens
-   up to peek-height when the player enters the trigger radius.
-   On exit, it retracts back down.
-============================================================ */
-AFRAME.registerComponent('mole-spawner', {
-  schema: {
-    count: { type: 'number', default: 5 },
-    minRadius: { type: 'number', default: 4 },
-    maxRadius: { type: 'number', default: 22 },
-    triggerDistance: { type: 'number', default: 3.5 },
-    peekHeight: { type: 'number', default: 0.25 },   // how high the mole rises
-    hiddenY:    { type: 'number', default: -0.4 }    // starting Y (below ground)
-  },
-  init: function () {
-    this.rig = document.getElementById('rig');
-    this.tmpVec = new THREE.Vector3();
-    this.moles = []; // [{ moleEl, x, z, currentY, targetY, isOut }]
-
-    // Place molehills at non-overlapping random points
-    const placed = [];
-    let attempts = 0;
-    while (placed.length < this.data.count && attempts < 200) {
-      attempts++;
-      const r = this.data.minRadius +
-                Math.random() * (this.data.maxRadius - this.data.minRadius);
-      const theta = Math.random() * Math.PI * 2;
-      const x = Math.cos(theta) * r;
-      const z = Math.sin(theta) * r;
-      // Reject if too close to another molehill
-      let ok = true;
-      for (const p of placed) {
-        if ((p.x - x) ** 2 + (p.z - z) ** 2 < 4 * 4) { ok = false; break; }
-      }
-      if (!ok) continue;
-
-      const yaw = Math.random() * 360;
-
-      // Molehill (static)
-      const hill = document.createElement('a-entity');
-      hill.setAttribute('gltf-model', '#molehill-model');
-      hill.setAttribute('position', `${x} 0 ${z}`);
-      hill.setAttribute('rotation', `0 ${yaw} 0`);
-      // Tweak scale here if your GLB is sized differently
-      hill.setAttribute('scale', '1 1 1');
-      this.el.appendChild(hill);
-
-      // Mole (hidden inside the hill)
-      const mole = document.createElement('a-entity');
-      mole.setAttribute('gltf-model', '#mole-model');
-      mole.setAttribute('position', `${x} ${this.data.hiddenY} ${z}`);
-      mole.setAttribute('rotation', `0 ${yaw} 0`);
-      mole.setAttribute('scale', '1 1 1');
-      this.el.appendChild(mole);
-
-      placed.push({ x, z });
-      this.moles.push({
-        moleEl: mole,
-        x, z,
-        currentY: this.data.hiddenY,
-        targetY:  this.data.hiddenY,
-        isOut: false
-      });
-    }
-  },
-  tick: function (time, delta) {
-    if (!this.rig || !this.rig.object3D) return;
-    this.rig.object3D.getWorldPosition(this.tmpVec);
-    const px = this.tmpVec.x, pz = this.tmpVec.z;
-    const trigSq = this.data.triggerDistance * this.data.triggerDistance;
-    const dtSec = delta * 0.001;
-    // Smoothing factor — exponential approach toward target Y
-    const smoothing = 1 - Math.exp(-dtSec * 6.0);
-
-    for (const m of this.moles) {
-      const dSq = (m.x - px) ** 2 + (m.z - pz) ** 2;
-      const shouldBeOut = dSq < trigSq;
-      // Hysteresis: only retract when player is clearly outside (+1m)
-      // to avoid jitter at the boundary
-      const outerTrigSq = (this.data.triggerDistance + 1.0) ** 2;
-      if (shouldBeOut) {
-        m.targetY = this.data.peekHeight;
-        m.isOut = true;
-      } else if (dSq > outerTrigSq) {
-        m.targetY = this.data.hiddenY;
-        m.isOut = false;
-      }
-
-      // Smooth approach (frame-rate independent)
-      m.currentY += (m.targetY - m.currentY) * smoothing;
-
-      // Update entity
-      const pos = m.moleEl.object3D.position;
-      pos.y = m.currentY;
-    }
-  }
-});
-
-/* ============================================================
-   FROG SPAWNER — N frogs that hop around randomly, and
-   panic-leap away when the player gets too close.
-   ============================================================
-   Each frog cycles through three states:
-     IDLE     — sitting still, counting down to next hop
-     HOPPING  — mid-arc; XZ eased toward target, Y is a sine arc
-     STARTLED — single big jump directly away from the player
-============================================================ */
-AFRAME.registerComponent('frog-spawner', {
-  schema: {
-    count: { type: 'number', default: 3 },
-    areaRadius: { type: 'number', default: 20 },
-    startleDistance: { type: 'number', default: 2.5 }
-  },
-  init: function () {
-    this.rig = document.getElementById('rig');
-    this.tmpVec = new THREE.Vector3();
-    this.frogs = [];
-
-    for (let i = 0; i < this.data.count; i++) {
-      const theta = Math.random() * Math.PI * 2;
-      const r = Math.random() * this.data.areaRadius * 0.7;
-      const x = Math.cos(theta) * r;
-      const z = Math.sin(theta) * r;
-
-      const el = document.createElement('a-entity');
-      el.setAttribute('gltf-model', '#frog-model');
-      el.setAttribute('position', `${x} 0 ${z}`);
-      el.setAttribute('rotation', `0 ${Math.random() * 360} 0`);
-      el.setAttribute('scale', '1 1 1');
-      this.el.appendChild(el);
-
-      this.frogs.push({
-        el,
-        state: 'IDLE',
-        idleUntil: performance.now() + 800 + Math.random() * 1200,
-        startX: x, startZ: z,
-        targetX: x, targetZ: z,
-        baseY: 0,
-        hopT: 0,         // 0..1 progress through current hop
-        hopDuration: 0,
-        hopHeight: 0,
-        yaw: Math.random() * Math.PI * 2,
-        targetYaw: Math.random() * Math.PI * 2
-      });
-    }
-  },
-
-  // Pick a new random target a short distance away
-  pickHopTarget: function (frog, big) {
-    const dist = big ? (1.8 + Math.random() * 1.0)
-                     : (0.6 + Math.random() * 0.9);
-    const angle = frog.yaw + (Math.random() - 0.5) * 0.8; // mostly forward
-    let tx = frog.el.object3D.position.x + Math.cos(angle) * dist;
-    let tz = frog.el.object3D.position.z + Math.sin(angle) * dist;
-
-    // Clamp inside the area
-    const r = Math.hypot(tx, tz);
-    if (r > this.data.areaRadius) {
-      tx *= this.data.areaRadius / r;
-      tz *= this.data.areaRadius / r;
-    }
-
-    frog.startX = frog.el.object3D.position.x;
-    frog.startZ = frog.el.object3D.position.z;
-    frog.targetX = tx;
-    frog.targetZ = tz;
-    frog.hopT = 0;
-    frog.hopDuration = big ? 0.45 : 0.55; // seconds; startle is faster
-    frog.hopHeight = big ? 0.55 : 0.28;
-
-    // Face the hop direction
-    frog.targetYaw = Math.atan2(tx - frog.startX, tz - frog.startZ);
-  },
-
-  // Pick a target away from the player (startle response)
-  pickPanicTarget: function (frog, px, pz) {
-    const dx = frog.el.object3D.position.x - px;
-    const dz = frog.el.object3D.position.z - pz;
-    const len = Math.hypot(dx, dz) || 1;
-    const dist = 2.0 + Math.random() * 0.8;
-    let tx = frog.el.object3D.position.x + (dx / len) * dist;
-    let tz = frog.el.object3D.position.z + (dz / len) * dist;
-    const r = Math.hypot(tx, tz);
-    if (r > this.data.areaRadius) {
-      tx *= this.data.areaRadius / r;
-      tz *= this.data.areaRadius / r;
-    }
-    frog.startX = frog.el.object3D.position.x;
-    frog.startZ = frog.el.object3D.position.z;
-    frog.targetX = tx;
-    frog.targetZ = tz;
-    frog.hopT = 0;
-    frog.hopDuration = 0.4;
-    frog.hopHeight = 0.7;
-    frog.targetYaw = Math.atan2(tx - frog.startX, tz - frog.startZ);
-  },
-
-  tick: function (time, delta) {
-    if (!this.rig || !this.rig.object3D) return;
-    this.rig.object3D.getWorldPosition(this.tmpVec);
-    const px = this.tmpVec.x, pz = this.tmpVec.z;
-    const dtSec = delta * 0.001;
-    const startleSq = this.data.startleDistance * this.data.startleDistance;
-
-    for (const frog of this.frogs) {
-      const fx = frog.el.object3D.position.x;
-      const fz = frog.el.object3D.position.z;
-      const distToPlayerSq = (fx - px) ** 2 + (fz - pz) ** 2;
-
-      // Smoothly rotate toward target yaw
-      let dy = frog.targetYaw - frog.yaw;
-      while (dy > Math.PI)  dy -= Math.PI * 2;
-      while (dy < -Math.PI) dy += Math.PI * 2;
-      frog.yaw += dy * Math.min(1, dtSec * 8);
-      frog.el.object3D.rotation.y = frog.yaw;
-
-      if (frog.state === 'IDLE') {
-        // Startle?
-        if (distToPlayerSq < startleSq) {
-          this.pickPanicTarget(frog, px, pz);
-          frog.state = 'HOPPING';
-          frog.isStartled = true;
-          continue;
-        }
-        // Time to hop?
-        if (time >= frog.idleUntil) {
-          this.pickHopTarget(frog, false);
-          frog.state = 'HOPPING';
-          frog.isStartled = false;
-        }
-      } else if (frog.state === 'HOPPING') {
-        frog.hopT += dtSec / frog.hopDuration;
-        if (frog.hopT >= 1) {
-          // Land
-          frog.el.object3D.position.x = frog.targetX;
-          frog.el.object3D.position.z = frog.targetZ;
-          frog.el.object3D.position.y = frog.baseY;
-          frog.state = 'IDLE';
-          // Startled frogs catch their breath a moment longer
-          const wait = frog.isStartled ? 600 : (900 + Math.random() * 1400);
-          frog.idleUntil = time + wait;
-        } else {
-          // Ease XZ (smoothstep) and arc Y (sine)
-          const t = frog.hopT;
-          const easedT = t * t * (3 - 2 * t);
-          frog.el.object3D.position.x = frog.startX + (frog.targetX - frog.startX) * easedT;
-          frog.el.object3D.position.z = frog.startZ + (frog.targetZ - frog.startZ) * easedT;
-          frog.el.object3D.position.y = frog.baseY + Math.sin(t * Math.PI) * frog.hopHeight;
-        }
-      }
-    }
-  }
-});
-
-
 
 } // end bootMeadow
 
