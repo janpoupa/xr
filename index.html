@@ -698,7 +698,7 @@ AFRAME.registerComponent('mole-spawner', {
       hill.setAttribute('position', `${x} 0 ${z}`);
       hill.setAttribute('rotation', `0 ${yaw} 0`);
       // Tweak scale here if your GLB is sized differently
-      hill.setAttribute('scale', '1 1 1');
+      hill.setAttribute('scale', '0.3 0.3 0.3');
       this.el.appendChild(hill);
 
       // Mole (hidden inside the hill)
@@ -706,7 +706,7 @@ AFRAME.registerComponent('mole-spawner', {
       mole.setAttribute('gltf-model', '#mole-model');
       mole.setAttribute('position', `${x} ${this.data.hiddenY} ${z}`);
       mole.setAttribute('rotation', `0 ${yaw} 0`);
-      mole.setAttribute('scale', '1 1 1');
+      mole.setAttribute('scale', '0.3 0.3 0.3');
       this.el.appendChild(mole);
 
       placed.push({ x, z });
@@ -782,7 +782,7 @@ AFRAME.registerComponent('frog-spawner', {
       el.setAttribute('gltf-model', '#frog-model');
       el.setAttribute('position', `${x} 0 ${z}`);
       el.setAttribute('rotation', `0 ${Math.random() * 360} 0`);
-      el.setAttribute('scale', '1 1 1');
+      el.setAttribute('scale', '0.2 0.2 0.2');
       this.el.appendChild(el);
 
       this.frogs.push({
