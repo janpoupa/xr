@@ -816,7 +816,7 @@ AFRAME.registerComponent('frog-spawner', {
 
       const el = document.createElement('a-entity');
       el.setAttribute('gltf-model', '#frog-model');
-      el.setAttribute('position', `${x} 0.2 ${z}`);
+      el.setAttribute('position', `${x} 0.5 ${z}`);
       el.setAttribute('rotation', `0 ${Math.random() * 360} 0`);
       el.setAttribute('scale', '0.2 0.2 0.2');
       this.el.appendChild(el);
