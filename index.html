@@ -92,7 +92,7 @@
   <a-entity id="butterflies" butterfly-spawner="count: 6; areaRadius: 18; minHeight: 0.6; maxHeight: 2.2"></a-entity>
 
   <!-- Player rig -->
-  <a-entity id="rig" position="0 0 4"
+  <a-entity id="rig" position="0 -0.5 4"
             movement-controls="speed: 0.12; fly: false"
             vr-locomotion="speed: 2.5; turnMode: snap; snapAngle: 30; smoothTurnSpeed: 90"
             lay-down-control>
@@ -386,7 +386,7 @@ AFRAME.registerComponent('grass-field', {
 
           vec2 toPlayer = worldPos.xz - uPlayerPos.xz;
           float d = length(toPlayer);
-          float pushRadius = 0.9;
+          float pushRadius = 1.5;
           if (d < pushRadius) {
             float t = 1.0 - d / pushRadius;
             t = t * t;
@@ -768,9 +768,9 @@ AFRAME.registerComponent('vr-locomotion', {
 AFRAME.registerComponent('lay-down-control', {
   init: function () {
     this.layingDown = false;
-    this.targetY = 0.1;
-    this.standY = 0.1;
-    this.layY = -0.5;
+    this.targetY = -1;
+    this.standY = -1;
+    this.layY = -3;
 
     this.toggle = this.toggle.bind(this);
     this.onButton = this.onButton.bind(this);
