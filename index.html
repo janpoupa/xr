@@ -768,9 +768,9 @@ AFRAME.registerComponent('vr-locomotion', {
 AFRAME.registerComponent('lay-down-control', {
   init: function () {
     this.layingDown = false;
-    this.targetY = 0.6;
-    this.standY = 0.6;
-    this.layY = 0.25;
+    this.targetY = 0.1;
+    this.standY = 0.1;
+    this.layY = -0.5;
 
     this.toggle = this.toggle.bind(this);
     this.onButton = this.onButton.bind(this);
