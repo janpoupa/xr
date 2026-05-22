@@ -41,7 +41,7 @@
   <h1>a meadow</h1>
   <p>A field of tall grass, swayed by an invisible wind.</p>
   <p>Walk slowly. Lay down. Listen.</p>
-  <small>WASD to move · Mouse to look · L to lay down · VR headset supported</small>
+  <small>Desktop: WASD move · drag mouse to look · L to lay down<br>VR: left stick move · right stick turn · A button to lay down</small>
   <button onclick="document.getElementById('intro').classList.add('hidden')">Enter</button>
 </div>
 
@@ -76,7 +76,7 @@
   <a-entity id="hills" hilly-ground="size: 600; segments: 96"></a-entity>
 
   <!-- Dense detailed grass around the player -->
-  <a-entity id="grassfield" grass-field="count: 80000; radius: 30"></a-entity>
+  <a-entity id="grassfield" grass-field="count: 150000; radius: 30"></a-entity>
 
   <!-- Sparse far grass extending toward the horizon hills -->
   <a-entity id="grass-far" grass-far="count: 25000; innerRadius: 28; outerRadius: 120"></a-entity>
@@ -91,12 +91,21 @@
   <a-entity id="butterflies" butterfly-spawner="count: 6; areaRadius: 18; minHeight: 0.6; maxHeight: 2.2"></a-entity>
 
   <!-- Player rig -->
-  <a-entity id="rig" position="0 1.6 4" movement-controls="speed: 0.12; fly: false" lay-down-control>
+  <a-entity id="rig" position="0 1.6 4"
+            movement-controls="speed: 0.12; fly: false"
+            vr-locomotion="speed: 2.5; turnMode: snap; snapAngle: 30; smoothTurnSpeed: 90"
+            lay-down-control>
     <a-entity id="camera" camera look-controls="pointerLockEnabled: false" wasd-controls="enabled: false">
       <a-entity cursor="rayOrigin: mouse" raycaster="objects: .interactive"></a-entity>
     </a-entity>
-    <a-entity laser-controls="hand: left"></a-entity>
-    <a-entity laser-controls="hand: right"></a-entity>
+    <!-- Tracked Quest controllers. The vr-locomotion component reads
+         thumbstick + button events from these. -->
+    <a-entity id="leftHand"
+              oculus-touch-controls="hand: left"
+              meta-touch-controls="hand: left"></a-entity>
+    <a-entity id="rightHand"
+              oculus-touch-controls="hand: right"
+              meta-touch-controls="hand: right"></a-entity>
   </a-entity>
 
 </a-scene>
@@ -638,18 +647,146 @@ AFRAME.registerComponent('movement-controls', {
 });
 
 /* ============================================================
-   LAY-DOWN — press L
+   VR LOCOMOTION — Quest thumbstick movement + turning
+   ============================================================
+   Left thumbstick  : smooth strafe/forward locomotion, relative
+                      to where the headset is looking.
+   Right thumbstick : turning. Two modes:
+                        - 'snap'   : 30° instant turns (comfort default)
+                        - 'smooth' : continuous rotation
+   The A button (right controller) toggles lay-down — handled in
+   lay-down-control, which listens on #rightHand.
+
+   In VR, looking around is done by physically moving your head;
+   the headset tracks that natively, so we don't touch pitch/yaw
+   of the camera here. We only move and turn the *rig*.
+============================================================ */
+AFRAME.registerComponent('vr-locomotion', {
+  schema: {
+    speed:           { type: 'number', default: 2.5 },   // m/s
+    turnMode:        { type: 'string', default: 'snap' }, // 'snap' | 'smooth'
+    snapAngle:       { type: 'number', default: 30 },     // degrees per snap
+    smoothTurnSpeed: { type: 'number', default: 90 },     // deg/s in smooth mode
+    deadzone:        { type: 'number', default: 0.15 },
+    maxRadius:       { type: 'number', default: 25 }
+  },
+  init: function () {
+    this.moveX = 0;     // left stick X (strafe)
+    this.moveY = 0;     // left stick Y (forward/back)
+    this.turnX = 0;     // right stick X (turn)
+    this.snapReady = true; // for snap-turn debouncing
+
+    this.camera = document.getElementById('camera');
+    this.headDir = new THREE.Vector3();
+    this.moveVec = new THREE.Vector3();
+
+    const left  = document.getElementById('leftHand');
+    const right = document.getElementById('rightHand');
+
+    // --- Left stick: movement ---
+    // thumbstickmoved fires with detail.x / detail.y, and importantly
+    // fires again with (0,0) when the stick returns to center, so we
+    // don't need a separate zeroing path.
+    if (left) {
+      left.addEventListener('thumbstickmoved', (e) => {
+        this.moveX = e.detail.x;
+        this.moveY = e.detail.y;
+      });
+    }
+
+    // --- Right stick: turning ---
+    if (right) {
+      right.addEventListener('thumbstickmoved', (e) => {
+        this.turnX = e.detail.x;
+      });
+    }
+  },
+
+  tick: function (time, delta) {
+    const dt = delta * 0.001;
+    if (!dt) return;
+    const rig = this.el.object3D;
+
+    /* ---------- TURNING ---------- */
+    if (this.data.turnMode === 'snap') {
+      if (Math.abs(this.turnX) > 0.6 && this.snapReady) {
+        const dir = this.turnX > 0 ? -1 : 1; // push right = turn right (clockwise)
+        rig.rotation.y += dir * THREE.MathUtils.degToRad(this.data.snapAngle);
+        this.snapReady = false;
+      } else if (Math.abs(this.turnX) < 0.3) {
+        this.snapReady = true; // re-arm once stick returns near center
+      }
+    } else {
+      // smooth turn
+      if (Math.abs(this.turnX) > this.data.deadzone) {
+        const dir = this.turnX > 0 ? -1 : 1;
+        rig.rotation.y += dir * THREE.MathUtils.degToRad(this.data.smoothTurnSpeed) * dt;
+      }
+    }
+
+    /* ---------- MOVEMENT ---------- */
+    const mag = Math.hypot(this.moveX, this.moveY);
+    if (mag > this.data.deadzone && this.camera && this.camera.object3D) {
+      // Use the SAME convention as the (working) keyboard movement:
+      //   forward = camera.getWorldDirection()
+      //   pressing W  == position -= forward
+      //   pressing D  == position += right,  right = (forward.z, 0, -forward.x)
+      this.camera.object3D.getWorldDirection(this.headDir);
+      this.headDir.y = 0;
+      this.headDir.normalize();
+      const forward = this.headDir;                                  // as keyboard
+      const rightV  = new THREE.Vector3(forward.z, 0, -forward.x);   // as keyboard
+
+      this.moveVec.set(0, 0, 0);
+      // Quest left stick: pushing FORWARD gives detail.y < 0, which
+      // should behave like pressing W (== -forward). So:
+      //   contribution_forward = forward * (+moveY)   // moveY<0 → -forward ✓
+      this.moveVec.addScaledVector(forward, this.moveY);
+      // Pushing RIGHT gives detail.x > 0, behave like pressing D (== +right):
+      this.moveVec.addScaledVector(rightV, this.moveX);
+
+      if (this.moveVec.lengthSq() > 0) {
+        this.moveVec.normalize().multiplyScalar(this.data.speed * dt * Math.min(mag, 1));
+        rig.position.x += this.moveVec.x;
+        rig.position.z += this.moveVec.z;
+
+        // Keep inside the dense field
+        const r = Math.hypot(rig.position.x, rig.position.z);
+        if (r > this.data.maxRadius) {
+          rig.position.x *= this.data.maxRadius / r;
+          rig.position.z *= this.data.maxRadius / r;
+        }
+      }
+    }
+  }
+});
+
+/* ============================================================
+   LAY-DOWN — 'L' key (desktop) or A button (Quest right hand)
    ============================================================ */
 AFRAME.registerComponent('lay-down-control', {
   init: function () {
     this.layingDown = false;
     this.targetY = 1.6;
+    this.standY = 1.6;
+    this.layY = 0.25;
+
+    const toggle = () => {
+      this.layingDown = !this.layingDown;
+      this.targetY = this.layingDown ? this.layY : this.standY;
+    };
+
+    // Desktop key
     window.addEventListener('keydown', (e) => {
-      if (e.code === 'KeyL') {
-        this.layingDown = !this.layingDown;
-        this.targetY = this.layingDown ? 0.25 : 1.6;
-      }
+      if (e.code === 'KeyL') toggle();
     });
+
+    // Quest A button (right controller). We attach the listener once
+    // the right hand entity exists.
+    const right = document.getElementById('rightHand');
+    if (right) {
+      right.addEventListener('abuttondown', toggle);
+    }
   },
   tick: function () {
     const cur = this.el.object3D.position.y;
@@ -706,7 +843,7 @@ AFRAME.registerComponent('mole-spawner', {
       hill.setAttribute('position', `${x} 0.5 ${z}`);
       hill.setAttribute('rotation', `0 ${yaw} 0`);
       // Tweak scale here if your GLB is sized differently
-      hill.setAttribute('scale', '0.3 0.3 0.3');
+      hill.setAttribute('scale', '0.15 0.15 0.15');
       this.el.appendChild(hill);
 
       // Mole (hidden inside the hill)
@@ -714,7 +851,7 @@ AFRAME.registerComponent('mole-spawner', {
       mole.setAttribute('gltf-model', '#mole-model');
       mole.setAttribute('position', `${x} ${this.data.hiddenY} ${z}`);
       mole.setAttribute('rotation', `0 ${yaw} 0`);
-      mole.setAttribute('scale', '0.3 0.3 0.3');
+      mole.setAttribute('scale', '0.15 0.15 0.15');
       this.el.appendChild(mole);
 
       placed.push({ x, z });
